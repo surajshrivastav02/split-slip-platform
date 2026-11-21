@@ -6,9 +6,10 @@ async function send(action, body) {
   const response = await fetch('/api/slip?action=' + action, {
     method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)
   });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || 'Please try again.');
-  return result;
+const contentType = response.headers.get('content-type') || '';
+  if (!response.ok) throw new Error(contentType.includes('application/json') ? (await response.json()).error || 'Please try again.' : 'Please try again.');
+  if (!contentType.includes('application/json')) throw new Error('Please try again.');
+  return await response.json();
 }
 
 async function newQuestion() {
