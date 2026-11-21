@@ -1,0 +1,6 @@
+.env*
+!.env.example
+.vercel/
+*.sqlite*
+__pycache__/
+.venv/

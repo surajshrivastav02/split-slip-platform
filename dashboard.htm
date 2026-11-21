@@ -1,0 +1,138 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Group dashboard · Split Slip</title>
+<style>
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:#f4f5fb;color:#242741;font:16px/1.5 system-ui,sans-serif}aside{position:fixed;inset:0 auto 0 0;width:185px;background:#4841aa;color:white;padding:32px 18px}aside strong{font-size:24px}aside a{display:block;color:white;text-decoration:none;padding:12px;border-radius:10px}aside a:hover{background:#ffffff25}.avatar{font-size:36px;display:block;margin:25px 0}main{margin-left:185px;padding:32px clamp(15px,4vw,68px);max-width:1500px}header,.row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}h1,h2,h3,p{margin:0}h1{font-size:clamp(28px,4vw,44px);letter-spacing:-2px}h2{font-size:20px}small,.muted{color:#5d647c}.cards,.columns{display:grid;gap:16px;margin:20px 0}.cards{grid-template-columns:repeat(3,1fr)}.columns{grid-template-columns:1.2fr 1fr}.card,section{background:white;border:1px solid #e2e4ef;border-radius:17px;padding:20px;min-width:0}.card b{font-size:28px;display:block}.card:nth-child(1){background:#eeeaff}.card:nth-child(2){background:#def6f7}.card:nth-child(3){background:#fff0e4}section{margin-bottom:16px}button,select,input{font:inherit;border:1px solid #d2d5e0;border-radius:9px;padding:9px;background:white;color:inherit;max-width:100%}button{cursor:pointer}button:hover{border-color:#6458c8}.primary{background:#5046b5;color:white}.line{padding:12px 0;border-bottom:1px solid #ececf3}.bar{display:grid;grid-template-columns:minmax(72px,1fr) 2fr auto;align-items:center;gap:10px;width:100%;border:0;text-align:left;margin:5px 0}.track{background:#f0eff9;height:14px;border-radius:5px;overflow:hidden}.fill{display:block;height:100%;background:#6556c9;border-radius:5px}.bar:nth-child(even) .fill{background:#61cbd3}dialog{width:min(520px,95vw);max-height:90vh;border:0;border-radius:20px;padding:24px;color:inherit}dialog::backdrop{background:#20213965}form,label{display:grid;gap:6px}form{gap:13px}fieldset{border:1px solid #dedfea;border-radius:10px}fieldset label{display:flex;align-items:center}a{color:#4838a4}.note{background:#f5f4fb;padding:10px;border-radius:8px}summary{cursor:pointer}time{font-size:.83rem;color:#636a80}.error{color:#9c301c}button:focus-visible,a:focus-visible{outline:3px solid #43aaba}@media(max-width:800px){aside{position:static;width:auto;padding:12px;display:flex;align-items:center;gap:8px;overflow:auto}aside a{white-space:nowrap;padding:5px}.avatar{margin:0;font-size:24px}main{margin:0;padding:16px}.columns{grid-template-columns:1fr}.cards{gap:6px}.card{padding:9px}.card b{font-size:18px}.card small{font-size:12px}}
+</style>
+<aside><strong>Split Slip.</strong><span class="avatar" role="img" aria-label="Explorer avatar">🧑🏽‍🚀</span><a href="#overview">Overview</a><a href="#members">Members</a><a href="#history">History</a><a href="#settle">Settlements</a><button id="logout">Log out</button></aside>
+<p role="status" id="notice" style="margin:12px auto;text-align:center"></p><main id="overview" hidden><header><div><small>GROUP WORKSPACE</small><h1 id="title"></h1></div><div><select id="groups" aria-label="Select group"></select> <button id="newGroup">New group</button> <button id="join">Join group</button> <button id="reload">Refresh</button></div></header>
+<div class="cards"><div class="card"><small>Total group expenses</small><b id="total"></b></div><div class="card"><small>Selected share</small><b id="share"></b></div><div class="card"><small>Selected paid</small><b id="paid"></b></div></div>
+<div class="columns"><section><div class="row"><h2>Spending by category</h2><select id="filter" aria-label="Filter chart by member"></select></div><small>Select a bar to see matching expenses.</small><div id="chart"></div></section><section id="members"><div class="row"><h2>Group members</h2><button id="addMember">Add member</button></div><div id="people"></div></section></div>
+<section id="history"><div class="row"><h2>Expense history</h2><button class="primary" id="addExpense">+ Add expense</button></div><p id="filterLabel"></p><div id="ledger"></div></section>
+<section id="settle"><h2>Settle up</h2><small>Preview a UPI link or record a settlement manually.</small><div id="payments"></div></section><small>Expenses and receipts are shared with joined members. Refresh to load their updates.</small></main>
+<dialog id="modal"><div class="row"><h2 id="modalTitle"></h2><button id="close" aria-label="Close">×</button></div><form id="editor"></form><p role="alert" class="error" id="error"></p></dialog>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const escapeHTML=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money=n=>new Intl.NumberFormat('en-IN',{style:'currency',currency:'INR',maximumFractionDigits:2}).format(n/100);
+const categories=['Food','Travel','Electricity','E-commerce','Other'];
+const now=()=>new Date().toISOString();
+const localTime=()=>new Date(Date.now()-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16);
+let groupList=[], current=null, me='', member='', category='';
+const group=()=>current;
+function divide(amount,ids) {
+  return Object.fromEntries(ids.map((id,i)=>[id,Math.floor(amount/ids.length)+(i<amount%ids.length?1:0)]));
+}
+async function api(action,body,params={}) {
+  const query=new URLSearchParams({action,...params});
+  const response=await fetch('/api/slip?'+query,body===undefined?{}:{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
+  });
+  if(response.status===401){location.replace('/login.htm');throw Error('Log in again.')}
+  const result=await response.json();
+  if(!response.ok)throw Error(result.error||'Request failed.');
+  return result;
+}
+let loadVersion=0;
+async function loadGroup(id) {
+  const version=++loadVersion;
+  const state=await api('state');
+  const selected=state.groups.find(g=>g.id===id)||state.groups[0];
+  const fresh=await api('group',undefined,{group:selected.id});
+  if(version!==loadVersion)return;
+  if(current?.id!==fresh.id){member=category=''}
+  current=fresh;me=state.me;groupList=state.groups;
+  $('overview').hidden=false;$('notice').textContent='';render();
+}
+async function saveAction(action,fields) {
+  const result=await api(action,{...fields,group:current.id,revision:current.revision});
+  await loadGroup(current.id);
+  return result;
+}
+function report(error){$('notice').textContent=error.message;}
+const options=items=>items.map((v,i)=>'<option value="'+i+'">'+escapeHTML(v)+'</option>').join('');
+function amountFor(e){return member===''?e.amount:e.shares[member]||0}
+function sum(items,fn){return items.reduce((s,x)=>s+fn(x),0)}
+function balances(g){const net=g.members.map((_,i)=>sum(g.expenses,e=>(e.payer===i?e.amount:0)-(e.shares[i]||0)));for(const p of g.payments){net[p.from]+=p.amount;net[p.to]-=p.amount}return net}
+// A zero-sum partition with k blocks needs n-k transfers. Maximize k by
+// subset DP, then match actual debtors and creditors within each block.
+function plan(net) {
+  const ids=net.map((v,i)=>v?i:-1).filter(i=>i>=0);
+  const count=1<<ids.length, sums=new Float64Array(count);
+  const blocks=new Uint8Array(count), last=new Uint8Array(count);
+  for(let mask=1;mask<count;mask++){
+    const bit=mask&-mask, first=31-Math.clz32(bit);
+    sums[mask]=sums[mask^bit]+net[ids[first]];
+    let best=-1;
+    for(let i=0;i<ids.length;i++){
+      if(!(mask&(1<<i)))continue;
+      const score=blocks[mask^(1<<i)]+Number(sums[mask]===0);
+      if(score>best){best=score;last[mask]=i}
+    }
+    blocks[mask]=best;
+  }
+  const order=[];
+  for(let mask=count-1;mask;mask^=1<<last[mask])order.push(ids[last[mask]]);
+  const payments=[], remaining=net.slice();
+  let batch=[], sum=0;
+  for(const id of order.reverse()){
+    batch.push(id);sum+=net[id];
+    if(sum!==0)continue;
+    for(const from of batch.filter(i=>remaining[i]<0)){
+      for(const to of batch.filter(i=>remaining[i]>0)){
+        const amount=Math.min(-remaining[from],remaining[to]);
+        if(amount>0){payments.push({from,to,amount});remaining[from]+=amount;remaining[to]-=amount;}
+      }
+    }
+    batch=[];
+  }
+  return payments;
+}
+function render(){const g=group();$('title').textContent=g.name;$('groups').innerHTML=options(groupList.map(g=>g.name));$('groups').value=groupList.findIndex(x=>x.id===g.id);
+ $('filter').innerHTML='<option value="">Everyone</option>'+options(g.members.map(m=>m.name));$('filter').value=member;
+ $('total').textContent=money(sum(g.expenses,e=>e.amount));$('share').textContent=money(sum(g.expenses,amountFor));$('paid').textContent=money(sum(g.expenses,e=>member===''||e.payer===+member?e.amount:0));
+ const values=categories.map(c=>sum(g.expenses.filter(e=>e.cat===c),amountFor));
+ $('chart').innerHTML=categories.map((c,i)=>'<button class="bar" data-category="'+c+'" aria-pressed="'+(category===c)+'">'+c+'<span class="track"><span class="fill" style="width:'+100*values[i]/Math.max(1,...values)+'%"></span></span><b>'+money(values[i])+'</b></button>').join('');
+ $('people').innerHTML=g.members.map((m,i)=>'<div class="line row"><div><b>'+escapeHTML(m.name)+'</b><br><small>Paid '+money(sum(g.expenses,e=>e.payer===i?e.amount:0))+' · Share '+money(sum(g.expenses,e=>e.shares[i]||0))+'</small></div><span>'+(me===g.owner||me===m.phone?'<button data-edit="'+i+'">Edit</button> ':'')+(me===g.owner&&me!==m.phone?'<button data-invite="'+i+'">Invite code</button>':'')+'</span></div>').join('');
+ $('filterLabel').textContent=category?category+' · Select the bar again to clear.':'';
+ $('ledger').innerHTML=g.expenses.map((e,i)=>({e,i})).filter(({e})=>(!category||category===e.cat)&&(member===''||member in e.shares)).sort((a,b)=>new Date(b.e.date)-new Date(a.e.date)).map(({e,i})=>'<details class="line"><summary><b>'+escapeHTML(e.title)+'</b> · '+money(e.amount)+' · '+escapeHTML(e.cat)+'</summary><time>'+new Date(e.date).toLocaleString()+'</time><p>Paid by '+escapeHTML(g.members[e.payer].name)+'</p><p>'+Object.entries(e.shares).map(([id,v])=>escapeHTML(g.members[id].name)+' '+money(v)).join(' · ')+'</p>'+(e.bill?'<button data-bill="'+i+'">Download bill</button>':'')+'<h3>Sheet comments</h3>'+e.comments.map(c=>'<p><b>'+escapeHTML(c.author)+'</b> '+escapeHTML(c.text)+' <time>'+new Date(c.date).toLocaleString()+'</time></p>').join('')+'<button data-comment="'+i+'">Add comment</button></details>').join('')||'<p class="muted">No matching expenses.</p>';
+ $('addMember').hidden=me!==g.owner;const moves=plan(balances(g));$('payments').innerHTML=moves.map((p,i)=>'<div class="row line"><span>'+escapeHTML(g.members[p.from].name)+' → '+escapeHTML(g.members[p.to].name)+' <b>'+money(p.amount)+'</b></span><button data-pay="'+i+'">Review settlement</button></div>').join('')||'<p>All settled.</p>';
+ for(const p of g.payments){const row=document.createElement('p');row.textContent='Confirmed · '+g.members[p.from].name+' → '+g.members[p.to].name+' · '+money(p.amount)+' · '+new Date(p.date).toLocaleString();$('payments').append(row)}
+}
+function modal(title,html,save){$('modalTitle').textContent=title;$('error').textContent='';$('editor').innerHTML=html+'<button class="primary">Confirm</button>';$('editor').onsubmit=async e=>{e.preventDefault();const b=e.submitter;b.disabled=true;try{await save(new FormData(e.target));$('modal').close();render()}catch(err){$('error').textContent=err.name==='QuotaExceededError'?'Browser storage is full. Try a smaller receipt.':err.message}finally{b.disabled=false}};$('modal').showModal()}
+function input(label,name,attrs='required'){return '<label>'+label+'<input name="'+name+'" '+attrs+'></label>'}
+function clean(f,k){const v=String(f.get(k)||'').trim();if(!v)throw Error('Please complete '+k+'.');return v}
+$('close').onclick=()=>$('modal').close();
+$('groups').onchange=e=>loadGroup(groupList[+e.target.value].id).catch(report);$('filter').onchange=e=>{member=e.target.value;category='';render()};
+$('newGroup').onclick=()=>modal('Create group',input('Group name','name','maxlength="60" required'),async f=>{
+  const result=await api('create',{name:clean(f,'name')});await loadGroup(result.id);
+});
+$('join').onclick=()=>modal('Join group',input('One-use invite code','code'),async f=>{
+  const result=await api('join',{code:clean(f,'code')});await loadGroup(result.id);
+});
+$('reload').onclick=()=>loadGroup(current.id).catch(report);
+$('logout').onclick=async()=>{try{await api('logout',{});location.replace('/login.htm')}catch(error){report(error)}};
+function editMember(i) {
+  const m=group().members[i]||{};
+  modal(i==null?'Add member':'Edit member',input('Name','name')+
+    input('Mobile number','phone','type="tel" pattern="[6-9][0-9]{9}" required')+
+    input('UPI ID (optional)','upi','placeholder="name@bank"'),
+    f=>saveAction('member',{index:i,name:clean(f,'name'),phone:f.get('phone'),upi:f.get('upi')}));
+  for(const field of ['name','phone','upi'])$('editor').elements[field].value=m[field]||'';
+  $('editor').elements.phone.readOnly=i!=null;
+}
+$('addMember').onclick=()=>editMember(null);
+function readBill(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve({name:file.name,data:reader.result});reader.onerror=()=>reject(Error('Could not read this bill.'));reader.readAsDataURL(file)})}
+$('addExpense').onclick=()=>{const g=group();modal('Add expense',input('Where was it spent?','title','placeholder="e.g. Zomato dinner" required')+input('Total amount (₹)','amount','type="number" min=".01" max="9999999" step=".01" required')+'<label>Category<select name="cat">'+categories.map(c=>'<option>'+c+'</option>').join('')+'</select></label>'+input('Date and time','date','type="datetime-local" required')+'<label>Paid by<select name="payer">'+options(g.members.map(m=>m.name))+'</select></label><fieldset><legend>Split between</legend>'+g.members.map((m,i)=>'<label><input type="checkbox" name="who" value="'+i+'" checked>'+escapeHTML(m.name)+'</label>').join('')+'</fieldset><output id="estimate" class="note"></output>'+input('Bill (photo or PDF, up to 1 MB)','bill','type="file" accept="image/jpeg,image/png,application/pdf"')+'<small id="billHint"></small>',async f=>{
+ const ids=f.getAll('who').map(Number),amount=Math.round(Number(f.get('amount'))*100),file=f.get('bill'),cat=f.get('cat');if(!ids.length)throw Error('Select at least one participant.');if(['Electricity','E-commerce'].includes(cat)&&!file.size)throw Error('Attach the required bill.');if(file.size>1000000||file.size&&!['image/jpeg','image/png','application/pdf'].includes(file.type))throw Error('Choose a JPEG, PNG or PDF under 1 MB.');
+ const entry={title:clean(f,'title'),amount,cat,date:new Date(f.get('date')).toISOString(),payer:+f.get('payer'),shares:divide(amount,ids),comments:[],bill:file.size?await readBill(file):null};await saveAction("expense",entry)});
+ const form=$('editor');form.elements.date.value=localTime();function estimate(){const n=form.querySelectorAll(':checked').length,amt=Math.round(+form.elements.amount.value*100),required=['Electricity','E-commerce'].includes(form.elements.cat.value);form.elements.bill.required=required;$('billHint').textContent=required?'Bill required for this category.':amt>50000?'Bill recommended for expenses over ₹500.':'Bill optional.';$('estimate').textContent=n?'Split calculator · '+money(amt)+' ÷ '+n+' ≈ '+money(Math.round(amt/n))+' each':'Choose participants.'}form.oninput=estimate;estimate();$('modal').addEventListener('close',()=>form.oninput=null,{once:true})};
+document.addEventListener('click',event=>{const b=event.target.closest('button');if(!b)return;const d=b.dataset,g=group();if('category'in d){category=category===d.category?'':d.category;render()}if('edit'in d)editMember(+d.edit);
+ if('invite'in d)modal('Create invite code','<p>Share this code privately with the member. It expires in 24 hours and replaces their previous code.</p>',async()=>{
+   const result=await saveAction('invite',{index:+d.invite});$('notice').textContent='Invite code: '+result.code;
+ });
+ if('comment'in d)modal('Expense sheet comment',input('Comment','text','maxlength="600" required'),f=>saveAction('comment',{index:+d.comment,text:clean(f,'text')}));
+ if('bill'in d){const bill=g.expenses[d.bill].bill;api('bill',undefined,{group:g.id,id:bill.id}).then(result=>{
+   const a=document.createElement('a');a.href=result.data;a.download=bill.name;a.click();
+ }).catch(report)}
+ if('pay'in d){const p=plan(balances(g))[+d.pay],recipient=g.members[p.to];const url='upi://pay?'+new URLSearchParams({pa:recipient.upi,pn:recipient.name,am:(p.amount/100).toFixed(2),cu:'INR'});modal('Confirm settlement','<p>'+escapeHTML(g.members[p.from].name)+' pays '+escapeHTML(recipient.name)+' <b>'+money(p.amount)+'</b></p>'+(recipient.upi?'<a href="'+escapeHTML(url)+'">Open UPI payment link</a>':'<small>Edit the recipient’s profile to add their UPI ID and enable the link.</small>')+'<label><span><input type="checkbox" required> I confirm this settlement is complete.</span></label><small>Confirm only after checking the payment.</small>',()=>saveAction('settle',p))}});loadGroup().catch(report);
+</script></html>
